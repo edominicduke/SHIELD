@@ -1,3 +1,11 @@
+"""
+The following file is from the master branch of https://github.com/YuchenLiu-a/byzantine_skew,
+the repository used for the "Exploit Gradient Skewness to Circumvent Byzantine Defenses for
+Federated Learning" paper, which introduces STRIKE. The intention is to use this as starter code
+to build off of, so that my implementation of SHIELD (my solution for making STRIKE compatible
+and testable against this code) can be developed on top of it.
+Any additional changes aside from this will be commented starting with a *
+"""
 from __future__ import annotations
 
 import math
@@ -79,6 +87,8 @@ def fl_train(args):
         byz_dev_stats = utils.eval_byz_dev(byz_client_msgs, ben_client_msgs)
         agg_dev_stats = utils.eval_agg_dev(agg_update, ben_client_msgs)
         perf_stats = utils.eval_perf(global_model, te_dataloader, loss_fun)
+        # * SHIELD Phase 0: optional diagnostics (empty dict when disabled, so logging is unchanged)
+        phase0_stats = utils.eval_phase0_diagnostics(ben_client_msgs, byz_client_msgs) if args.phase0_diag else {}
         # wandb log
         if args.wandb:
             import wandb
@@ -90,6 +100,7 @@ def fl_train(args):
                 **agg_verbose_log,
                 **agg_dev_stats,
                 **perf_stats,
+                **phase0_stats,  # * SHIELD Phase 0 diagnostics
             }
             wandb.log(log_data) # type: ignore
         if not args.nice and epoch == 0:
@@ -104,6 +115,7 @@ def fl_train(args):
         utils.print_dict(agg_verbose_log, args.aggregator)
         utils.print_dict(agg_dev_stats, 'agg_update dev stats')
         utils.print_dict(perf_stats, f'performance {epoch}')
+        utils.print_dict(phase0_stats, 'SHIELD phase0 diagnostics')  # * prints nothing when disabled
         
 
     print('==================== end of training ====================')

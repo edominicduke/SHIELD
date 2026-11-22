@@ -1,3 +1,11 @@
+"""
+The following file is from the master branch of https://github.com/YuchenLiu-a/byzantine_skew,
+the repository used for the "Exploit Gradient Skewness to Circumvent Byzantine Defenses for
+Federated Learning" paper, which introduces STRIKE. The intention is to use this as starter code
+to build off of, so that my implementation of SHIELD (my solution for making STRIKE compatible
+and testable against this code) can be developed on top of it.
+Any additional changes aside from this will be commented starting with a *
+"""
 from __future__ import annotations
 
 import argparse
@@ -68,6 +76,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--pin_memory', action='store_true', default=False, )
     parser.add_argument('--n_workers', default=1, type=int, )
     parser.add_argument('--te_batch_size', default=128, type=int, )
+
+    # * SHIELD Phase 0: enable extra per-round diagnostics comparing benign and Byzantine updates
+    parser.add_argument('--phase0_diag', action='store_true', default=False, )
 
     # wandb
     parser.add_argument('--wandb', action='store_true', default=False, )

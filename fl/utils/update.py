@@ -1,3 +1,11 @@
+"""
+The following file is from the master branch of https://github.com/YuchenLiu-a/byzantine_skew,
+the repository used for the "Exploit Gradient Skewness to Circumvent Byzantine Defenses for
+Federated Learning" paper, which introduces STRIKE. The intention is to use this as starter code
+to build off of, so that my implementation of SHIELD (my solution for making STRIKE compatible
+and testable against this code) can be developed on top of it.
+Any additional changes aside from this will be commented starting with a *
+"""
 from __future__ import annotations
 
 import torch
@@ -145,3 +153,92 @@ def eval_dev(target_update: torch.Tensor, ref_update: torch.Tensor, eps: float=1
     }
 
     return dev_stats
+
+# * ---------------------------------------------------------------------------
+# * SHIELD Phase 0 diagnostics (new, not part of the starter code).
+# * Measures, per round, whether Byzantine updates differ from benign updates in
+# * a way that is invisible in low dimensions but visible in higher ones.
+# * ---------------------------------------------------------------------------
+@torch.no_grad()
+def eval_phase0_diagnostics(
+    ben_client_msgs: dict[str, dict],
+    byz_client_msgs: dict[str, dict],
+    ks: Tuple[int, ...] = (2, 5, 10, 20),
+    eps: float = 1e-7,
+) -> dict:
+    # * need at least 3 benign updates (for a meaningful subspace) and 1 Byzantine update
+    if len(ben_client_msgs) < 3 or len(byz_client_msgs) == 0:
+        return {}
+
+    # * flatten benign and Byzantine updates into [n_clients x n_params] matrices
+    flat_ben, _ = flatten_updates({idx: msg['update'] for idx, msg in ben_client_msgs.items()})
+    flat_byz, _ = flatten_updates({idx: msg['update'] for idx, msg in byz_client_msgs.items()})
+    n_ben = flat_ben.size(0)
+
+    stats = {}
+
+    # * (a) pairwise-distance contrast among benign updates: (max - min) / min over distinct pairs.
+    # * near 0 => all pairs look equally far apart (distance concentration); large => a meaningful "crowd"
+    ben_dists = torch.cdist(flat_ben, flat_ben)
+    off_diag_mask = ~torch.eye(n_ben, dtype=torch.bool)
+    off_diag = ben_dists[off_diag_mask]
+    stats['p0_ben_dist_contrast'] = ((off_diag.max() - off_diag.min()) / (off_diag.min() + eps)).item()
+    # * mean benign pairwise distance, used as a scale reference
+    stats['p0_ben_mean_pairwise_dist'] = off_diag.mean().item()
+
+    # * how far each Byzantine update is from its nearest benign update, relative to how far
+    # * benign updates are from their own nearest benign neighbor. a ratio <= 1 means the
+    # * Byzantine update sits inside the crowd by full-dimensional L2 distance
+    ben_nn_dist = ben_dists.masked_fill(~off_diag_mask, float('inf')).min(dim=1)[0]
+    byz_to_ben_nn_dist = torch.cdist(flat_byz, flat_ben).min(dim=1)[0]
+    stats['p0_byz_nn_dist_ratio'] = (byz_to_ben_nn_dist.mean() / (ben_nn_dist.mean() + eps)).item()
+
+    # * largest pairwise distance among Byzantine updates; 0 means every Byzantine client sent an identical vector
+    stats['p0_byz_max_pairwise_dist'] = torch.cdist(flat_byz, flat_byz).max().item()
+
+    # * (b) explained-variance spectrum of the benign updates.
+    # * the n x n Gram matrix gives the same spectrum as an SVD of the [n x n_params] matrix
+    # * without ever touching the millions of coordinates
+    ben_mean = flat_ben.mean(dim=0)
+    centered_ben = flat_ben - ben_mean
+    gram = (centered_ben @ centered_ben.T).double()
+    eigvals, eigvecs = torch.linalg.eigh(gram)  # * eigenvalues come back in ascending order
+    eigvals = eigvals.flip(0).clamp_min(0)      # * reorder to descending, remove tiny negative noise
+    eigvecs = eigvecs.flip(1)
+    var_ratio = eigvals / (eigvals.sum() + eps)
+    # * centering leaves at most n_ben - 1 non-zero directions, so benign updates live in <= n_ben - 1 dims
+    stats['p0_var_ratio_top'] = var_ratio[:min(10, n_ben - 1)].tolist()
+    stats['p0_var_cumulative'] = var_ratio.cumsum(dim=0)[:n_ben - 1].tolist()
+
+    # * (c) residual norm outside the top-k benign principal subspace, for each k in ks.
+    # * the projection of a centered vector r onto the i-th right singular vector v_i is
+    # * (X_c r)·u_i / s_i, so only n-sized vectors are needed and no [n_params x k] basis is built
+    k_max = min(max(ks), n_ben - 1)
+    sing_vals = eigvals[:k_max].sqrt().clamp_min(eps)
+    top_eigvecs = eigvecs[:, :k_max]
+
+    # * benign coordinates in the top-k_max basis (in-sample); rows of the Gram matrix are X_c x_j
+    ben_coords = (gram @ top_eigvecs) / sing_vals
+    ben_sq_norm = gram.diagonal()
+    # * Byzantine coordinates: center with the benign mean, then project the same way
+    centered_byz = flat_byz - ben_mean
+    byz_coords = ((centered_ben @ centered_byz.T).double().T @ top_eigvecs) / sing_vals
+    byz_sq_norm = centered_byz.double().pow(2).sum(dim=1)
+
+    ben_cum_sq = ben_coords.pow(2).cumsum(dim=1)
+    byz_cum_sq = byz_coords.pow(2).cumsum(dim=1)
+    for k in ks:
+        if k > k_max:
+            continue  # * not enough benign updates to define a k-dimensional subspace
+        ben_res = (ben_sq_norm - ben_cum_sq[:, k - 1]).clamp_min(0).sqrt()
+        byz_res = (byz_sq_norm - byz_cum_sq[:, k - 1]).clamp_min(0).sqrt()
+        # * NOTE: benign residuals are in-sample (each benign update helped build the subspace),
+        # * so they are biased low, and reach 0 at k = n_ben - 1; compare with that in mind
+        stats[f'p0_res_ben_mean_k{k}'] = ben_res.mean().item()
+        stats[f'p0_res_ben_max_k{k}'] = ben_res.max().item()
+        stats[f'p0_res_byz_mean_k{k}'] = byz_res.mean().item()
+        # * residual as a fraction of the update's own centered norm (scale-free)
+        stats[f'p0_res_ben_frac_k{k}'] = (ben_res / (ben_sq_norm.sqrt() + eps)).mean().item()
+        stats[f'p0_res_byz_frac_k{k}'] = (byz_res / (byz_sq_norm.sqrt() + eps)).mean().item()
+
+    return stats

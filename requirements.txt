@@ -1,0 +1,7 @@
+# * New file (not from the starter code): dependencies for running the code.
+# * Local venv uses the CPU build of PyTorch. On a GPU machine (e.g. Colab/Kaggle),
+# * install the default CUDA build instead: pip install torch torchvision numpy wandb
+torch
+torchvision
+numpy
+wandb
