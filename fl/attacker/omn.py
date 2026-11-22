@@ -33,7 +33,7 @@ class Omn(Attacker):
             sampled_byz_client_messages = self.pack_byz_client_msgs(sampled_byz_client_idxs, byz_update)
             sampled_client_messages = {**sampled_benign_client_messages, **sampled_byz_client_messages}
 
-            agg_update, _ = defender.defend(sampled_client_messages, defender_knowledge)
+            agg_update, _ = defender.defend(sampled_client_messages, defender_knowledge, commit=False)  # * oracle query: must not change SHIELD state
             flat_agg_update, _ = flatten_update(agg_update)
 
             dev_norm: float = (flat_agg_update - flat_avg_update).norm().item()

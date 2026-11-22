@@ -19,6 +19,7 @@ from .minmax import MinMax
 from .minsum import MinSum
 from .omn import Omn
 from .skew import Skew
+from .skew_aware import SkewAware  # * SHIELD-aware STRIKE
 
 def get_attacker(byz_clients: dict[str, Client], args: Namespace):
     if args.attack == 'bitflip':
@@ -37,6 +38,8 @@ def get_attacker(byz_clients: dict[str, Client], args: Namespace):
         return Omn(byz_clients, args)
     elif args.attack == 'skew':
         return Skew(byz_clients, args)
+    elif args.attack == 'skew_aware':  # * SHIELD-aware STRIKE
+        return SkewAware(byz_clients, args)
     else:
         raise Exception('invalid attack')
 

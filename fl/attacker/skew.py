@@ -25,6 +25,8 @@ class Skew(Attacker):
             # use gradients of honest clients as reference
             ref_updates = {idx: knowledge['benign_client_messages'][idx]['update'] for idx in knowledge['known_benign_client_idxs']}
         flat_ref_updates, structure = utils.flatten_updates(ref_updates)
+        if getattr(self.args, 'gpu_fast', False):  # * GPU path: the cdist and the strength bisection below are heavy on the CPU
+            flat_ref_updates = flat_ref_updates.cuda()  # * move to the GPU
 
         flat_skew_dir = self.init_dev(flat_ref_updates)
         n_ben = len(knowledge['benign_client_messages'])
@@ -57,6 +59,7 @@ class Skew(Attacker):
             flat_byz_update = flat_skew_avg + strength * flat_dev
             verbose_log['strength'] = strength
 
+        flat_byz_update = flat_byz_update.cpu()  # * back to the CPU: the rest of the pipeline expects CPU updates
         byz_update = utils.unflatten_update(flat_byz_update, structure)
         sampled_byz_client_msgs = self.pack_byz_client_msgs(sampled_byz_client_idxs, byz_update)
 

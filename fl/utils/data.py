@@ -9,6 +9,7 @@ Any additional changes aside from this will be commented starting with a *
 from __future__ import annotations
 
 import json
+import math  # * for the GPU loader's batch count
 import numpy as np
 import numpy.random
 import os
@@ -216,3 +217,80 @@ def partition_data(
         client_data.print_cls_distribution()
         
     return client_datas
+
+# * ---------------------------------------------------------------------------
+# * GPU-resident data loading (new, not part of the starter code), enabled by --gpu_fast.
+# * The starter DataLoader re-spawns a worker process every epoch and runs PIL transforms on the CPU for every
+# * sample. For CIFAR-10/100 and FEMNIST the whole dataset fits on the GPU, so we apply the (deterministic)
+# * ToTensor + Normalize transform ONCE, keep the tensors on the GPU, and serve batches by indexing them.
+# * The values are the same as the PIL pipeline; only the shuffling RNG stream differs from the starter code.
+# * Datasets that do not qualify (e.g. ImageNet12) return None and fall back to the normal DataLoader.
+# * ---------------------------------------------------------------------------
+_GPU_CACHE = {}  # * id(dataset object) -> (x, y) tensors, so all clients share one GPU copy of the full dataset
+
+
+class _SizedStub:
+    # * minimal object with __len__, so a GPU loader exposes .dataset like a DataLoader (eval_perf reads it)
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def __len__(self) -> int:
+        return self.n
+
+
+def _gpu_tensors(total_data, device):
+    # * convert a whole dataset to (inputs, targets) tensors on `device`, or None if it is not supported
+    key = id(total_data)
+    if key in _GPU_CACHE:
+        return _GPU_CACHE[key]
+    out = None
+    if isinstance(total_data, CIFAR10):  # * also covers CIFAR100 (a subclass)
+        ops = getattr(getattr(total_data, 'transform', None), 'transforms', None)
+        # * only handle the exact ToTensor / Normalize pipeline used by load_data
+        if ops is not None and total_data.target_transform is None and all(isinstance(t, (transforms.ToTensor, transforms.Normalize)) for t in ops):
+            x = torch.from_numpy(total_data.data).to(device)  # * uint8, N x H x W x C
+            x = x.permute(0, 3, 1, 2).float().div(255.0).contiguous()  # * same as ToTensor: float in [0, 1], NCHW
+            for t in ops:
+                if isinstance(t, transforms.Normalize):
+                    mean = torch.as_tensor(t.mean, dtype=x.dtype, device=device).view(1, -1, 1, 1)
+                    std = torch.as_tensor(t.std, dtype=x.dtype, device=device).view(1, -1, 1, 1)
+                    x = (x - mean) / std  # * same arithmetic as torchvision's Normalize
+            y = torch.as_tensor(total_data.targets, dtype=torch.long, device=device)
+            out = (x, y)
+    elif isinstance(total_data, Femnist) and total_data.transform is None and total_data.target_transform is None:
+        out = (total_data.data.to(device), total_data.targets.to(device))  # * already tensors, no transform
+    _GPU_CACHE[key] = out
+    return out
+
+
+class GPUDataLoader:
+    # * yields (inputs, targets) batches that already live on the GPU; no worker processes, no PIL
+    def __init__(self, x, y, idxs, batch_size: int, shuffle: bool, device) -> None:
+        self.x, self.y, self.idxs = x, y, idxs
+        self.batch_size, self.shuffle, self.device = batch_size, shuffle, device
+        self.dataset = _SizedStub(len(idxs))  # * eval_perf uses len(loader.dataset)
+
+    def __len__(self) -> int:
+        return math.ceil(len(self.idxs) / self.batch_size)
+
+    def __iter__(self):
+        # * reshuffle every epoch like DataLoader(shuffle=True), using the (seeded) global generator of the device
+        order = self.idxs[torch.randperm(len(self.idxs), device=self.device)] if self.shuffle else self.idxs
+        for i in range(0, len(order), self.batch_size):
+            b = order[i:i + self.batch_size]  # * indices of this batch
+            yield self.x[b], self.y[b]
+
+
+def make_gpu_loader(dataset, batch_size: int, shuffle: bool, device='cuda'):
+    # * build a GPUDataLoader for a client dataset, the test set or a FEMNIST dataset; None if unsupported
+    if isinstance(dataset, ClientDataset):
+        tensors = _gpu_tensors(dataset.total_data, device)  # * shared full-dataset tensors
+        idxs = torch.as_tensor(dataset.client_data_idxs, dtype=torch.long, device=device)  # * this client's rows
+    elif isinstance(dataset, (CIFAR10, Femnist)):
+        tensors = _gpu_tensors(dataset, device)
+        idxs = torch.arange(len(dataset), device=device)  # * the whole dataset (e.g. the test set)
+    else:
+        return None
+    if tensors is None:
+        return None
+    return GPUDataLoader(tensors[0], tensors[1], idxs, batch_size, shuffle, device)

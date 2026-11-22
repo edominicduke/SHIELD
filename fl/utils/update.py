@@ -13,6 +13,21 @@ import torch.nn.functional as F
 
 from typing import Tuple
 
+# * GPU speed-up switch (new, not part of the starter code), set once by fl_train from --gpu_fast. When on, the
+# * heavy [n_clients x n_params] statistics below are computed on the GPU instead of the CPU
+_FAST = False  # * default: CPU statistics
+
+
+def set_fast(flag) -> None:  # * switch setter
+    # * turn the GPU statistics path on or off
+    global _FAST  # * module-level flag
+    _FAST = bool(flag)  # * store the flag
+
+
+def _maybe_gpu(t: torch.Tensor) -> torch.Tensor:  # * move a tensor to the GPU when enabled
+    # * move a tensor to the GPU only when the speed-up is on and a GPU exists
+    return t.cuda() if (_FAST and torch.cuda.is_available()) else t  # * no-op when disabled or no GPU
+
 @torch.no_grad()
 def flatten_update(update: dict[str, torch.Tensor]) -> Tuple[torch.Tensor, list[Tuple[str, torch.Size]]]:
     flat_param_updates = []
@@ -62,6 +77,7 @@ def eval_ben_updates(benign_client_messages: dict[str, dict], eps: float=1e-7) -
     else:
         benign_updates = {idx: benign_client_messages[idx]['update'] for idx in benign_client_messages}
         flat_benign_updates, _ = flatten_updates(benign_updates)
+        flat_benign_updates = _maybe_gpu(flat_benign_updates)  # * GPU path: the PCA below is the heaviest CPU step
         mean = flat_benign_updates.mean(dim=0)
         # dimension-wise
         
@@ -173,6 +189,7 @@ def eval_phase0_diagnostics(
     # * flatten benign and Byzantine updates into [n_clients x n_params] matrices
     flat_ben, _ = flatten_updates({idx: msg['update'] for idx, msg in ben_client_msgs.items()})
     flat_byz, _ = flatten_updates({idx: msg['update'] for idx, msg in byz_client_msgs.items()})
+    flat_ben, flat_byz = _maybe_gpu(flat_ben), _maybe_gpu(flat_byz)  # * GPU path for the Gram / distance computations
     n_ben = flat_ben.size(0)
 
     stats = {}
@@ -180,7 +197,7 @@ def eval_phase0_diagnostics(
     # * (a) pairwise-distance contrast among benign updates: (max - min) / min over distinct pairs.
     # * near 0 => all pairs look equally far apart (distance concentration); large => a meaningful "crowd"
     ben_dists = torch.cdist(flat_ben, flat_ben)
-    off_diag_mask = ~torch.eye(n_ben, dtype=torch.bool)
+    off_diag_mask = ~torch.eye(n_ben, dtype=torch.bool, device=flat_ben.device)  # * same device as the data
     off_diag = ben_dists[off_diag_mask]
     stats['p0_ben_dist_contrast'] = ((off_diag.max() - off_diag.min()) / (off_diag.min() + eps)).item()
     # * mean benign pairwise distance, used as a scale reference
@@ -242,3 +259,25 @@ def eval_phase0_diagnostics(
         stats[f'p0_res_byz_frac_k{k}'] = (byz_res / (byz_sq_norm.sqrt() + eps)).mean().item()
 
     return stats
+
+
+# * ---------------------------------------------------------------------------
+# * Pipeline-level selection metrics (new, not part of the starter code).
+# * Precision, recall and benign false-positive rate of the updates a defense REJECTED, computed against the
+# * simulator's ground truth. Only meaningful for defenses that select or reject updates.
+# * ---------------------------------------------------------------------------
+def eval_selection(kept_ids, sampled_ids, byz_ids) -> dict:  # * precision / recall / benign FPR of rejected updates
+    sampled = set(sampled_ids)  # * every client sampled this round
+    kept = set(kept_ids) & sampled  # * clients whose updates the pipeline kept
+    rejected = sampled - kept  # * everything else counts as rejected
+    byz = sampled & set(byz_ids)  # * sampled Byzantine clients (ground truth)
+    ben = sampled - byz  # * sampled benign clients
+    tp = len(rejected & byz)  # * Byzantine updates correctly rejected
+    fp = len(rejected & ben)  # * benign updates wrongly rejected
+    nan = float('nan')  # * undefined metrics are reported as NaN
+    return {  # * assemble the metric dict
+        'sel_n_rejected': len(rejected),  # * number of rejected updates
+        'sel_precision': tp / len(rejected) if len(rejected) > 0 else nan,  # * share of rejections that were Byzantine
+        'sel_recall': tp / len(byz) if len(byz) > 0 else nan,  # * share of Byzantine updates that were rejected
+        'sel_benign_fpr': fp / len(ben) if len(ben) > 0 else nan,  # * share of benign updates that were rejected
+    }

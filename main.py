@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
     # attack
     parser.add_argument('--byz_client_ratio', type=float, required=True, )
     parser.add_argument('--ben_known_ratio', type=float, default=0, )
-    parser.add_argument('--attack', type=str, choices=['bitflip', 'ipm', 'lie', 'mimic', 'minmax', 'minsum', 'omn', 'skew', ])
+    parser.add_argument('--attack', type=str, choices=['bitflip', 'ipm', 'lie', 'mimic', 'minmax', 'minsum', 'omn', 'skew', 'skew_aware', ])  # * 'skew_aware' is new (SHIELD-aware STRIKE)
     parser.add_argument('--ipm_epsilon', default=0.1, type=float, )
     parser.add_argument('--lie_z', default=1.5, type=float, )
     deviation_choices = ['unit_vec', 'sign', 'skew_mode', 'skew_std', 'neg_skew_mode', 'neg_skew_std', 'neg_std', 'ran_std', 'std' ]
@@ -79,6 +79,31 @@ def parse_args() -> argparse.Namespace:
 
     # * SHIELD Phase 0: enable extra per-round diagnostics comparing benign and Byzantine updates
     parser.add_argument('--phase0_diag', action='store_true', default=False, )
+
+    # * SHIELD: kernel-subspace filter (off / shadow = score+log with oracle clean training / active = hard rejection)
+    parser.add_argument('--shield', type=str, choices=['off', 'shadow', 'active'], default='off', )  # * SHIELD mode flag
+    parser.add_argument('--shield_c', default=3.5, type=float, help='robust z-score flagging cutoff', )  # * flagging cutoff
+    parser.add_argument('--shield_warmup', default=3, type=int, help='rounds with no rejection', )  # * warm-up rounds
+    parser.add_argument('--shield_max_reject_frac', default=0.5, type=float, help='max fraction of updates rejected per round', )  # * rejection cap
+    parser.add_argument('--shield_multipliers', default='0.25,0.5,1,2,4', type=str, help='RBF bandwidth multipliers of the median distance', )  # * bandwidth multipliers
+    parser.add_argument('--shield_pool_size', default=3, type=int, help='top multipliers kept as next-round candidates', )  # * pool size
+    parser.add_argument('--shield_khigh_factors', default='1.5,2,3', type=str, help='k_high = factor * k_low, factor drawn at random', )  # * k_high factors
+    parser.add_argument('--shield_var_thresh', default=0.85, type=float, help='cumulative variance share that defines k_low', )  # * k_low variance threshold
+    parser.add_argument('--shield_refit_iters', default=3, type=int, )  # * refit iterations
+    parser.add_argument('--shield_seed', default=None, type=int, help='seed of the separate SHIELD generator', )  # * separate generator seed
+    parser.add_argument('--shield_n_starts', default=16, type=int, help='random starting subsets for the robust fit', )  # * multi-start count
+    parser.add_argument('--shield_seed_size', default=4, type=int, help='size of each starting subset', )  # * multi-start seed size
+    parser.add_argument('--shield_n_folds', default=5, type=int, help='cross-fitting folds for SHIELD scores', )  # * cross-fit folds
+    parser.add_argument('--blind_defenses', action='store_true', default=False, )  # * defenses get an assumed Byzantine count, not the true one
+    parser.add_argument('--assumed_byz_ratio', default=None, type=float, help='assumed attacker fraction for blind defenses (default: shield_max_reject_frac)', )  # * assumed ratio
+    # * SHIELD-aware STRIKE ('skew_aware') switches
+    parser.add_argument('--aware_project', action=argparse.BooleanOptionalAction, default=True, help='keep only the in-benign-span part of the deviation', )  # * projection switch
+    parser.add_argument('--aware_noise', default=0.0, type=float, help='in-span noise scale per Byzantine client (0 = identical copies)', )  # * copy diversification
+    parser.add_argument('--aware_oracle', action=argparse.BooleanOptionalAction, default=True, help='bisection-search the strength through accept/reject queries', )  # * oracle switch
+    # * GPU speed-up (T4): GPU-resident data, persistent GPU client models, GPU statistics and Gram matrices
+    parser.add_argument('--gpu_fast', action='store_true', default=False, )  # * GPU speed-up switch
+    parser.add_argument('--profile', action='store_true', default=False, help='print a per-phase timing breakdown each round', )  # * timing breakdown
+    parser.add_argument('--aware_queries', default=8, type=int, help='bisection steps of the oracle search', )  # * queries per round
 
     # wandb
     parser.add_argument('--wandb', action='store_true', default=False, )
