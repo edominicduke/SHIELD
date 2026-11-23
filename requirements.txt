@@ -1,7 +1,15 @@
 # * New file (not from the starter code): dependencies for running the code.
-# * Local venv uses the CPU build of PyTorch. On a GPU machine (e.g. Colab/Kaggle),
-# * install the default CUDA build instead: pip install torch torchvision numpy wandb
-torch
+# * Python 3.9 or newer is required (argparse.BooleanOptionalAction is used by the SHIELD-aware attacker flags).
+# * Training needs an NVIDIA GPU: the starter code calls .cuda() directly. A local venv with the CPU build of PyTorch
+# * can only import the code. On a GPU machine (e.g. Colab/Kaggle) install the default CUDA build instead:
+# *   pip install torch torchvision numpy pandas matplotlib
+torch>=1.8          # * torch.linalg.pinv(hermitian=True) is used by SHIELD and the SHIELD-aware attacker
 torchvision
-numpy
+numpy>=1.17         # * np.random.default_rng is used for SHIELD's separate random generator
+
+# * only needed by shield_eval_colab.ipynb (summary tables and plots); Colab already has both preinstalled
+pandas
+matplotlib
+
+# * optional: wandb is imported lazily and only when --wandb is passed
 wandb
