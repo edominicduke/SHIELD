@@ -1,5 +1,5 @@
 <!-- * New file (not from the starter code): project README. -->
-# SHIELD: a blind defense against STRIKE for federated learning
+# SHIELD: An Adversarial AI Solution For Federated Learning
 
 SHIELD is a defense for federated learning (FL) that filters client updates before aggregation. It is built and tested
 against **STRIKE**, a Byzantine attack that exploits gradient skewness. SHIELD never sees the true number of
@@ -28,10 +28,10 @@ so that it is **compatible with the authors' implementation of STRIKE** and can 
 Conventions used throughout the code:
 
 - **Every file that comes from the starter code carries a header comment saying so.**
-- **Every change or addition we made is commented, and each such comment starts with `*`.**
+- **Every change or addition made is commented, and each such comment starts with `*`.**
 - **Defaults keep the starter behavior.** All new features sit behind new flags (`--shield`, `--blind_defenses`,
   `--gpu_fast`, `--profile`, `--phase0_diag`, ...) that default to off, so running without them follows the starter
-  code path. (This is by design; we have not re-run the paper's experiments to confirm identical numbers.)
+  code path. (This is by design; have not re-run the paper's experiments to confirm identical numbers.)
 
 ### Key files added by this work
 
@@ -44,7 +44,7 @@ Conventions used throughout the code:
 | `phase0_colab_run.ipynb`, `phase0_results.csv` | Saved output of one Phase 0 run. |
 | [requirements.txt](requirements.txt), [README.md](README.md) | Dependencies and this file. |
 
-### Starter files we modified (beyond adding the header comment)
+### Starter files modified (beyond adding the header comment)
 
 | File | Change |
 |---|---|
